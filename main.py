@@ -1,8 +1,5 @@
 import os
 import asyncio
-import logging
-
-logging.basicConfig(level=logging.INFO)
 
 async def pipe(reader, writer):
     try:
@@ -17,13 +14,12 @@ async def pipe(reader, writer):
     finally:
         try:
             writer.close()
-            await writer.wait_closed()
         except Exception:
             pass
 
 async def handle_client(reader, writer):
     try:
-        # Read the initial browser or script request header line
+        # Read the initial incoming request line from your local machine
         request_line = await reader.readline()
         if not request_line:
             writer.close()
@@ -36,32 +32,20 @@ async def handle_client(reader, writer):
 
         method, url = parts[0], parts[1]
 
-        # -------------------------------------------------------------
-        # Handle HTTPS Connection (CONNECT Tunneling)
-        # -------------------------------------------------------------
+        # Handle HTTPS CONNECT traffic natively through Render's web filters
         if method.upper() == 'CONNECT':
-            if ':' in url:
-                host, port = url.split(':')
-                port = int(port)
-            else:
-                host, port = url, 443
+            host, port = url.split(':') if ':' in url else (url, 443)
+            port = int(port)
 
-            # Open connection to the destination site (e.g. ipinfo.io)
             remote_reader, remote_writer = await asyncio.open_connection(host, port)
-            
-            # Send the clean connection protocol acknowledgement back to your machine
             writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             await writer.drain()
 
-            # Pass bi-directional streams cleanly across the socket layers
             asyncio.create_task(pipe(reader, remote_writer))
             asyncio.create_task(pipe(remote_reader, writer))
 
-        # -------------------------------------------------------------
-        # Handle Standard HTTP Traffic (GET/POST)
-        # -------------------------------------------------------------
+        # Handle standard HTTP traffic cleanly
         else:
-            # Strip protocol prefix if present
             clean_url = url[7:] if url.startswith('http://') else url
             path_parts = clean_url.split('/', 1)
             host_parts = path_parts[0].split(':')
@@ -69,9 +53,8 @@ async def handle_client(reader, writer):
             port = int(host_parts[1]) if len(host_parts) > 1 else 80
 
             remote_reader, remote_writer = await asyncio.open_connection(host, port)
-            
-            # Forward the complete initial line along with the rest of the stream headers
             remote_writer.write(request_line)
+            
             while True:
                 line = await reader.readline()
                 remote_writer.write(line)
@@ -82,18 +65,17 @@ async def handle_client(reader, writer):
             asyncio.create_task(pipe(remote_reader, writer))
             asyncio.create_task(pipe(reader, remote_writer))
 
-    except Exception as e:
+    except Exception:
         try:
             writer.close()
-            await writer.wait_closed()
         except Exception:
             pass
 
 async def main():
-    # Render binds the active running port natively via the PORT variable
+    # Read the dynamic port assigned by Render's routing architecture
     port = int(os.environ.get("PORT", 10000))
     server = await asyncio.start_server(handle_client, '0.0.0.0', port)
-    logging.info(f"🚀 High-Speed Proxy running on port {port}...")
+    print(f"🚀 Custom Proxy Operational on port {port}...")
     async with server:
         await server.serve_forever()
 
